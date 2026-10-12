@@ -1,9 +1,7 @@
 """One property, two independent estimates, and a public-data map explorer."""
 from dataclasses import asdict
 import hashlib
-import importlib
 from pathlib import Path
-from threading import RLock
 
 import pandas as pd
 import streamlit as st
@@ -14,16 +12,7 @@ from evaluation import evaluate_joint
 from explorer import (PROPERTY_LABELS, REASONS, PropertyQuery, compare_property,
                       display_rows, money, neighborhood_location, prepare_demo)
 from linear import ModelValidationError
-import map_view as _map_module
-
-# A running deployment can retain the pre-color-scale module during an update.
-# Reload only that old API, once. The module dictionary survives reload, keeping
-# one lock shared by every session; imports wait until the refresh completes.
-_map_import_lock = _map_module.__dict__.setdefault("_app_map_reload_lock", RLock())
-with _map_import_lock:
-    if not hasattr(_map_module, "fit_color_scale"):
-        _map_module = importlib.reload(_map_module)
-    from map_view import build_map, filter_map_data, fit_color_scale, fit_viewport, group_locations
+from map_view_v1 import build_map, filter_map_data, fit_color_scale, fit_viewport, group_locations
 
 
 st.set_page_config(page_title="Explorador y comparador inmobiliario", page_icon="🏘️", layout="wide")
@@ -48,17 +37,17 @@ def get_evaluation(fingerprint, filters):
 
 
 @st.cache_data(show_spinner=False)
-def get_color_scale(fingerprint, metric):
+def get_color_scale_v1(fingerprint, metric):
     return fit_color_scale(get_bundle(fingerprint)[0], metric)
 
 
 @st.cache_data(show_spinner=False, max_entries=32)
-def get_map_subset(fingerprint, types, neighborhoods, price_range, metric):
+def get_map_subset_v1(fingerprint, types, neighborhoods, price_range, metric):
     public_frame = get_bundle(fingerprint)[0]
     subset = filter_map_data(public_frame, types=types or None, neighborhoods=neighborhoods or None,
                              price_range=price_range, color_metric=metric)
     return subset, group_locations(subset, color_metric=metric,
-                                   color_scale=get_color_scale(fingerprint, metric))
+                                   color_scale=get_color_scale_v1(fingerprint, metric))
 
 
 st.title("Explorador y comparador inmobiliario")
@@ -203,14 +192,14 @@ with st.expander("Filtros y capas del mapa", expanded=False):
     show_neighbors = layers[2].checkbox("Comparables", value=True, key="map_show_neighbors")
     st.caption("Estos filtros cambian sólo los datos visibles. La consulta, los vecinos y los modelos mantienen su configuración.")
 
-color_scale = get_color_scale(fingerprint, metric)
+color_scale = get_color_scale_v1(fingerprint, metric)
 with st.container(key="map_status"):
     if price_min > price_max:
         st.warning("En el mapa, el precio mínimo no puede superar al máximo.")
         filtered = frame.iloc[:0].copy()
         locations = group_locations(filtered, color_metric=metric, color_scale=color_scale)
     else:
-        filtered, locations = get_map_subset(fingerprint, tuple(map_types), tuple(map_neighborhoods),
+        filtered, locations = get_map_subset_v1(fingerprint, tuple(map_types), tuple(map_neighborhoods),
                                              (price_min, price_max), metric)
     st.caption(f"{len(filtered):,} de {len(frame):,} registros · {len(locations):,} ubicaciones".replace(",", "."))
     if filtered.empty and price_min <= price_max:

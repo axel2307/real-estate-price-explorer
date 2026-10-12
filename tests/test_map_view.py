@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import map_view
+import map_view_v1
 from data import LAT_BOUNDS, LON_BOUNDS
-from map_view import (ColorScale, VIRIDIS_COLORS, build_map, filter_map_data,
+from map_view_v1 import (ColorScale, VIRIDIS_COLORS, build_map, filter_map_data,
                       fit_color_scale, fit_viewport, group_locations)
 
 
@@ -156,7 +156,7 @@ def test_prepared_base_groups_are_reused_and_match_normal_map(frame, monkeypatch
         grouped_row_counts.append(len(rows))
         return real_group_locations(rows, color_metric, **kwargs)
 
-    monkeypatch.setattr(map_view, "group_locations", observe_grouping)
+    monkeypatch.setattr(map_view_v1, "group_locations", observe_grouping)
     reused = build_map(frame, grouped_data=groups, comparable_row_ids=(40, 12))
     assert grouped_row_counts == [2]  # Only the selected neighbours are grouped.
     assert json.loads(normal.to_json()) == json.loads(reused.to_json())

@@ -97,7 +97,7 @@ explorer.py             Shared query and comparison helpers
 comparables.py          Filtered geographic neighbors
 linear.py               Named, scaled OLS fit and support checks
 evaluation.py           Coverage and errors on common held-out cases
-map_view.py             Visual filters, coincident points and map layers
+map_view_v1.py          Visual filters, coincident points and map layers
 data.py                 Validation, public projection loading, spatial split
 data/demo.csv           Authorized eight-field demonstration projection
 scripts/prepare_demo.py Local, explicit projection preparation

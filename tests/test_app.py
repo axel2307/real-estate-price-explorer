@@ -18,56 +18,49 @@ from explorer import money, prepare_demo
 APP = Path(__file__).resolve().parents[1] / "app.py"
 
 
-@pytest.mark.parametrize("module_state", ["healthy", "old_api", "reload_failure"])
-def test_map_import_recovery_is_scoped_and_runs_only_when_needed(module_state):
-    # Module reload recreates ColorScale, so keep this simulation out of the
-    # pytest process and its other map/cache tests.
+def test_versioned_map_ignores_old_module_without_runtime_reload():
+    # Keep an old deployed module in a separate process so this simulation
+    # cannot interfere with the map classes/caches used by the other tests.
     script = textwrap.dedent("""
         import importlib
         import json
         import sys
+        from types import ModuleType
         from streamlit.testing.v1 import AppTest
-        import map_view
 
-        app_path, module_state = sys.argv[1:]
-        original_reload = importlib.reload
-        reloaded = []
-        if module_state != "healthy":
-            del map_view.fit_color_scale
+        app_path = sys.argv[1]
+        old_module = ModuleType("map_view")
+        old_module.legacy_sentinel = object()
+        old_contents = dict(old_module.__dict__)
+        sys.modules["map_view"] = old_module
+        reload_attempts = []
 
-        def observed_reload(module):
-            reloaded.append(module.__name__)
-            assert module is map_view, "Recovery must not reload another module"
-            if module_state == "reload_failure":
-                raise RuntimeError("simulated map reload failure")
-            return original_reload(module)
+        def forbidden_reload(module):
+            reload_attempts.append(module.__name__)
+            raise AssertionError("Runtime module reload is forbidden")
 
-        importlib.reload = observed_reload
+        importlib.reload = forbidden_reload
         app = AppTest.from_file(app_path, default_timeout=60).run()
-        if module_state == "reload_failure":
-            assert len(app.exception) == 1
-            assert "simulated map reload failure" in app.exception[0].message
-            assert reloaded == ["map_view"]
-            assert not app.button
-        else:
+        for run in range(2):
+            if run:
+                app.run()
             assert not app.exception, [item.message for item in app.exception]
-            expected = [] if module_state == "healthy" else ["map_view"]
-            assert reloaded == expected
-            lock = map_view._app_map_reload_lock
-            app.run()
-            assert not app.exception, [item.message for item in app.exception]
-            assert reloaded == expected, "Healthy reruns must not reload map_view"
-            assert map_view._app_map_reload_lock is lock
-            assert callable(map_view.fit_color_scale)
-        print(json.dumps({"state": module_state, "reloaded": reloaded}))
+            assert sys.modules["map_view"] is old_module
+            assert old_module.__dict__ == old_contents
+            assert not reload_attempts
+            current = sys.modules["map_view_v1"]
+            assert callable(current.fit_color_scale)
+            assert current.ColorScale.__module__ == "map_view_v1"
+            assert app.get("deck_gl_json_chart")
+        print(json.dumps({"runs": 2, "old_module_unchanged": True, "reload_attempts": reload_attempts}))
     """)
     completed = subprocess.run(
-        [sys.executable, "-c", script, str(APP), module_state],
+        [sys.executable, "-c", script, str(APP)],
         cwd=APP.parent, capture_output=True, text=True, timeout=150,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     result = json.loads(completed.stdout.strip().splitlines()[-1])
-    assert result["state"] == module_state
+    assert result == {"runs": 2, "old_module_unchanged": True, "reload_attempts": []}
 
 
 @pytest.fixture(scope="module")

@@ -9,7 +9,7 @@ Use Python 3.12 and run from this project directory:
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pip check
-python -m compileall -q app.py explorer.py data.py comparables.py linear.py evaluation.py map_view.py scripts tests
+python -m compileall -q app.py explorer.py data.py comparables.py linear.py evaluation.py map_view_v1.py scripts tests
 python -m pytest
 python -m streamlit run app.py
 ```

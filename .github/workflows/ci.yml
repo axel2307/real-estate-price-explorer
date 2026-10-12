@@ -24,5 +24,5 @@ jobs:
             constraints.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pip check
-      - run: python -m compileall -q app.py explorer.py data.py comparables.py linear.py evaluation.py map_view.py scripts tests
+      - run: python -m compileall -q app.py explorer.py data.py comparables.py linear.py evaluation.py map_view_v1.py scripts tests
       - run: python -m pytest
