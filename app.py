@@ -1,7 +1,9 @@
 """One property, two independent estimates, and a public-data map explorer."""
 from dataclasses import asdict
 import hashlib
+import importlib
 from pathlib import Path
+from threading import RLock
 
 import pandas as pd
 import streamlit as st
@@ -12,7 +14,16 @@ from evaluation import evaluate_joint
 from explorer import (PROPERTY_LABELS, REASONS, PropertyQuery, compare_property,
                       display_rows, money, neighborhood_location, prepare_demo)
 from linear import ModelValidationError
-from map_view import build_map, filter_map_data, fit_color_scale, fit_viewport, group_locations
+import map_view as _map_module
+
+# A running deployment can retain the pre-color-scale module during an update.
+# Reload only that old API, once. The module dictionary survives reload, keeping
+# one lock shared by every session; imports wait until the refresh completes.
+_map_import_lock = _map_module.__dict__.setdefault("_app_map_reload_lock", RLock())
+with _map_import_lock:
+    if not hasattr(_map_module, "fit_color_scale"):
+        _map_module = importlib.reload(_map_module)
+    from map_view import build_map, filter_map_data, fit_color_scale, fit_viewport, group_locations
 
 
 st.set_page_config(page_title="Explorador y comparador inmobiliario", page_icon="🏘️", layout="wide")

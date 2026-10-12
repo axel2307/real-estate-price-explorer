@@ -2,6 +2,9 @@
 
 import json
 from pathlib import Path
+import subprocess
+import sys
+import textwrap
 
 import pandas as pd
 import pytest
@@ -13,6 +16,58 @@ from explorer import money, prepare_demo
 
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
+
+
+@pytest.mark.parametrize("module_state", ["healthy", "old_api", "reload_failure"])
+def test_map_import_recovery_is_scoped_and_runs_only_when_needed(module_state):
+    # Module reload recreates ColorScale, so keep this simulation out of the
+    # pytest process and its other map/cache tests.
+    script = textwrap.dedent("""
+        import importlib
+        import json
+        import sys
+        from streamlit.testing.v1 import AppTest
+        import map_view
+
+        app_path, module_state = sys.argv[1:]
+        original_reload = importlib.reload
+        reloaded = []
+        if module_state != "healthy":
+            del map_view.fit_color_scale
+
+        def observed_reload(module):
+            reloaded.append(module.__name__)
+            assert module is map_view, "Recovery must not reload another module"
+            if module_state == "reload_failure":
+                raise RuntimeError("simulated map reload failure")
+            return original_reload(module)
+
+        importlib.reload = observed_reload
+        app = AppTest.from_file(app_path, default_timeout=60).run()
+        if module_state == "reload_failure":
+            assert len(app.exception) == 1
+            assert "simulated map reload failure" in app.exception[0].message
+            assert reloaded == ["map_view"]
+            assert not app.button
+        else:
+            assert not app.exception, [item.message for item in app.exception]
+            expected = [] if module_state == "healthy" else ["map_view"]
+            assert reloaded == expected
+            lock = map_view._app_map_reload_lock
+            app.run()
+            assert not app.exception, [item.message for item in app.exception]
+            assert reloaded == expected, "Healthy reruns must not reload map_view"
+            assert map_view._app_map_reload_lock is lock
+            assert callable(map_view.fit_color_scale)
+        print(json.dumps({"state": module_state, "reloaded": reloaded}))
+    """)
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(APP), module_state],
+        cwd=APP.parent, capture_output=True, text=True, timeout=150,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    result = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert result["state"] == module_state
 
 
 @pytest.fixture(scope="module")
