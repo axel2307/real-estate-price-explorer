@@ -10,16 +10,16 @@ The full source is not distributed. Addresses, names, contacts, descriptions, ti
 
 ## What the browser receives
 
-The explorer exposes all 7,496 published demonstration records through the map and record detail controls. Coincident coordinates are grouped visually, with access to the records at that point. Grouping does not remove or anonymize those rows. Public price and feature values can be viewed; do not replace the bundled projection with confidential data under the assumption that only aggregate values will be visible.
+The explorer exposes all 7,495 published demonstration records through the map and record detail controls. Coincident coordinates are grouped visually, with access to the records at that point. Grouping does not remove or anonymize those rows, nor prove that they describe the same property. Public price and feature values can be viewed; do not replace the bundled projection with confidential data under the assumption that only aggregate values will be visible. Saturating a map color at a display limit does not hide or alter the underlying record values.
 
 The query marker and selected neighbor locations are displayed at three-decimal precision. Query values are sent to the Streamlit server to calculate the two estimates and remain in the visitor's session state while the session is active. The application does not write queries to disk or deliberately log their contents. No street address, name or contact field is requested.
 
-Shared caches contain the public demonstration data, its fitted model, evaluation results for comparable settings, and filtered/grouped public map records. Individual property queries and their estimates are kept in session state, not in those caches.
+Shared caches contain the public demonstration data, its fitted model, evaluation results for comparable settings, filtered/grouped public map records, and color reference limits computed from the full public dataset. The color-scale cache is keyed by the dataset fingerprint and the selected price metric. Individual property queries and their estimates are kept in session state, not in those caches.
 
 Pydeck loads the Carto basemap through the browser. That service can receive ordinary request metadata, including IP address and the viewed map region. The app does not send a private property dataset to a property-data provider. This configuration needs no map token. Browser and hosting infrastructure have their own storage and logging behavior; application-level behavior is not a retention guarantee for those services.
 
 ## Uploads and local preparation
 
-This version has no upload interface and no setting to enable uploads. The raw CSV/TSV parser remains a local preparation and testing utility. Running `scripts/prepare_demo.py` requires an explicit local source path; it is not part of a visitor request and refuses to overwrite its source. Review rights and privacy before preparing or publishing any replacement dataset.
+This version has no upload interface and no setting to enable uploads. The raw CSV/TSV parser remains a local preparation and testing utility. Running `scripts/prepare_demo.py` requires an explicit local source path; it is not part of a visitor request and refuses to overwrite its source. The preparation applies one authorized exclusion for a confirmed non-total amount without publishing the source text or original identifiers. Review rights and privacy before preparing or publishing any replacement dataset.
 
 The only data-file exception in `.gitignore` is `data/demo.csv`. Before release, inspect the exact staged file list: original inputs, local paths in private reports, credentials, transfer metadata and browser artifacts must remain outside the repository.

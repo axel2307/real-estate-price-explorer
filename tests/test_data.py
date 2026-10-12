@@ -311,3 +311,86 @@ def test_preparation_rejects_hard_link_to_original(tmp_path):
     with pytest.raises(DataValidationError, match="original"):
         prepare_demo(source, alias)
     assert source.read_bytes() == original
+
+
+def reviewed_installment_row():
+    return {
+        "property_type": "apartment", "neighborhood": "Almagro",
+        "area_total": 78.0, "area_covered": 65.0, "rooms": 3,
+        "lat": -34.597, "lon": -58.423, "price_usd": 5500.0,
+    }
+
+
+def test_reviewed_exclusion_hash_is_canonical_and_matches_all_eight_fields():
+    from scripts.prepare_demo import REVIEWED_EXCLUSIONS, public_row_fingerprint
+
+    row = reviewed_installment_row()
+    fingerprint = public_row_fingerprint(row)
+    assert fingerprint in REVIEWED_EXCLUSIONS
+    equivalent = dict(row, area_total=78, area_covered=65, rooms=3.0,
+                      lat="-34.597", lon="-58.423", price_usd=5500)
+    assert public_row_fingerprint(equivalent) == fingerprint
+    changes = {"property_type": "house", "neighborhood": "Palermo",
+               "area_total": 79, "area_covered": 64, "rooms": 4,
+               "lat": -34.598, "lon": -58.424, "price_usd": 5501}
+    assert set(changes) == set(data.PUBLIC_DEMO_COLUMNS)
+    for field, value in changes.items():
+        assert public_row_fingerprint(dict(row, **{field: value})) not in REVIEWED_EXCLUSIONS
+
+
+@pytest.mark.parametrize("source_coordinates,source_duplicates,rounding_duplicates", [
+    ([-34.597, -34.598, -34.597], 1, 0),
+    ([-34.5971, -34.598, -34.5972], 0, 1),
+])
+def test_reviewed_installment_exclusion_is_exact_preserves_source_and_never_repairs(
+    tmp_path, source_coordinates, source_duplicates, rounding_duplicates,
+):
+    from scripts.prepare_demo import prepare_demo
+
+    raw = raw_frame(3)
+    raw["place_name"] = "Almagro"
+    raw["surface_total_in_m2"] = 78
+    raw["surface_covered_in_m2"] = 65
+    raw["rooms"] = 3
+    raw["lat"] = source_coordinates
+    raw["lon"] = -58.423
+    # Same low price at a different location stays. The later feature-duplicate
+    # must not be promoted or used to repair the excluded installment amount.
+    raw["price"] = [5500, 5500, 165000]
+    source, output = tmp_path / "source.csv", tmp_path / "demo.csv"
+    source.write_text(raw.to_csv(index=False), encoding="utf-8")
+    source_before = source.read_bytes()
+    report = prepare_demo(source, output)
+    first_output = output.read_bytes()
+    published, _ = load_demo(first_output)
+
+    assert source.read_bytes() == source_before
+    assert report["source_duplicate_rows_removed"] == source_duplicates
+    assert report["rounding_duplicate_rows_removed"] == rounding_duplicates
+    assert report["reviewed_excluded_rows"] == 1
+    assert report["public_rows"] == len(published) == 1
+    assert report["reviewed_exclusions"][0]["reason"] == "Reviewed installment amount, not a full-property asking price."
+    assert published.price_usd.tolist() == [5500]
+    assert published.lat.tolist() == [-34.598]
+    assert b"165000" not in first_output and b"PRIVATE" not in first_output
+    assert report["sha256"] == hashlib.sha256(first_output).hexdigest()
+    prepare_demo(source, output)
+    assert source.read_bytes() == source_before
+    assert output.read_bytes() == first_output
+    json.dumps(report, allow_nan=False)
+
+
+def test_reviewed_exclusion_with_no_remaining_rows_does_not_write(tmp_path):
+    from scripts.prepare_demo import prepare_demo
+
+    raw = raw_frame(1)
+    raw.loc[0, ["place_name", "surface_total_in_m2", "surface_covered_in_m2", "rooms", "lat", "lon", "price"]] = [
+        "Almagro", 78, 65, 3, -34.597, -58.423, 5500,
+    ]
+    source, output = tmp_path / "source.csv", tmp_path / "demo.csv"
+    source.write_text(raw.to_csv(index=False), encoding="utf-8")
+    original = source.read_bytes()
+    with pytest.raises(DataValidationError, match="exclusiones revisadas"):
+        prepare_demo(source, output)
+    assert source.read_bytes() == original
+    assert not output.exists()

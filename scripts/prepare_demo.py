@@ -10,6 +10,7 @@ reviewed. It does not verify authorship, fictional status or an upstream license
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import hashlib
 import io
 import json
@@ -22,11 +23,37 @@ sys.path.insert(0, str(REPOSITORY_ROOT))
 from data import PUBLIC_DEMO_COLUMNS, DataValidationError, load_csv, load_demo
 
 
+# Review decisions refer only to the eight already-public fields, never source
+# row numbers or private text. Do not add a price/error threshold or infer a
+# replacement total from payment counts.
+REVIEWED_EXCLUSIONS = {
+    "210612d5d2b414b09116a82740f730f299d4aac193b6dbfa9c3462835814953f":
+        "Reviewed installment amount, not a full-property asking price.",
+}
+
+
+def public_row_fingerprint(row: Mapping[str, object]) -> str:
+    """Hash one validated public row in PUBLIC_DEMO_COLUMNS order.
+
+    UTF-8 compact JSON uses text labels, float areas/price, integer rooms and
+    three-decimal coordinate strings, so integer/float input spelling agrees.
+    """
+    values = [
+        str(row["property_type"]), str(row["neighborhood"]),
+        float(row["area_total"]), float(row["area_covered"]), int(row["rooms"]),
+        f"{float(row['lat']):.3f}", f"{float(row['lon']):.3f}", float(row["price_usd"]),
+    ]
+    payload = json.dumps(values, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def prepare_demo(source: str | Path, output: str | Path) -> dict:
     """Write only reviewed columns, then round, revalidate and rededuplicate.
 
     The first valid row is retained for any collisions created by coordinate
-    coarsening. Prices and areas are not generated, imputed or perturbed.
+    coarsening. Exact reviewed exclusions are applied after that unchanged
+    selection, so a rejected row cannot introduce a replacement duplicate.
+    Prices and areas are not generated, imputed or perturbed.
     """
     source, output = Path(source).resolve(), Path(output).resolve()
     if source == output or (output.exists() and source.exists() and source.samefile(output)):
@@ -40,6 +67,16 @@ def prepare_demo(source: str | Path, output: str | Path) -> dict:
     if rounded.empty:
         raise DataValidationError("No quedaron filas válidas para la demo pública.")
     public = rounded.loc[:, PUBLIC_DEMO_COLUMNS].copy()
+    fingerprints = public.apply(public_row_fingerprint, axis=1)
+    exclusion_report = [
+        {"public_row_sha256": fingerprint, "reason": reason,
+         "excluded_rows": int(fingerprints.eq(fingerprint).sum())}
+        for fingerprint, reason in REVIEWED_EXCLUSIONS.items()
+        if fingerprints.eq(fingerprint).any()
+    ]
+    public = public.loc[~fingerprints.isin(REVIEWED_EXCLUSIONS)].copy()
+    if public.empty:
+        raise DataValidationError("No quedaron filas válidas después de las exclusiones revisadas.")
     for coordinate in ("lat", "lon"):
         public[coordinate] = public[coordinate].map(lambda value: f"{value:.3f}")
     csv_bytes = public.to_csv(index=False, lineterminator="\n").encode("utf-8")
@@ -56,6 +93,8 @@ def prepare_demo(source: str | Path, output: str | Path) -> dict:
         "rounding_duplicate_rows_removed": rounded_report["duplicate_rows_removed"],
         "rounding_duplicate_feature_groups": rounded_report["duplicate_feature_groups"],
         "rounding_duplicate_target_conflict_groups": rounded_report["duplicate_target_conflict_groups"],
+        "reviewed_excluded_rows": sum(item["excluded_rows"] for item in exclusion_report),
+        "reviewed_exclusions": exclusion_report,
         "public_rows": len(public),
         "public_columns": list(PUBLIC_DEMO_COLUMNS),
         "coordinate_decimals": 3,
@@ -66,6 +105,7 @@ def prepare_demo(source: str | Path, output: str | Path) -> dict:
             "Only the eight allowlisted fields are exported; all raw addresses, URLs, titles, descriptions, contacts and identifiers are excluded.",
             "Coordinates are rounded to three decimals, approximately 100 meters here; this minimization is not a claim of anonymization.",
             "Coordinate coarsening can merge distinct units with matching features; the first valid record is kept.",
+            "Only exact public-row fingerprints with a reviewed semantic error are excluded after deduplication; no threshold or inferred replacement price is used.",
             "Prices, areas, rooms, property types and approved neighborhood labels come from the validated source; no replacement observations are generated.",
         ],
     }

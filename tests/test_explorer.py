@@ -29,8 +29,8 @@ def query(bundle):
 def test_display_ids_preserve_the_original_split_and_exact_public_rows(bundle):
     frame, train, test, fitted, _, _ = bundle
     original_train, original_test, _ = split_data(load_demo()[0], test_fraction=.2, seed=42)
-    assert (len(frame), len(train), len(test)) == (7496, 6541, 955)
-    assert frame.row_id.tolist() == list(range(7496))
+    assert (len(frame), len(train), len(test)) == (7495, 6540, 955)
+    assert frame.row_id.tolist() == list(range(7495))
     assert set(train.row_id).isdisjoint(test.row_id)
     assert set(train.spatial_group).isdisjoint(test.spatial_group)
     assert fitted.training_rows == len(train)

@@ -12,7 +12,7 @@ from evaluation import evaluate_joint
 from explorer import (PROPERTY_LABELS, REASONS, PropertyQuery, compare_property,
                       display_rows, money, neighborhood_location, prepare_demo)
 from linear import ModelValidationError
-from map_view import build_map, filter_map_data, fit_viewport, group_locations
+from map_view import build_map, filter_map_data, fit_color_scale, fit_viewport, group_locations
 
 
 st.set_page_config(page_title="Explorador y comparador inmobiliario", page_icon="🏘️", layout="wide")
@@ -36,12 +36,18 @@ def get_evaluation(fingerprint, filters):
     return evaluate_joint(train, test, filters, fitted=fitted)
 
 
+@st.cache_data(show_spinner=False)
+def get_color_scale(fingerprint, metric):
+    return fit_color_scale(get_bundle(fingerprint)[0], metric)
+
+
 @st.cache_data(show_spinner=False, max_entries=32)
 def get_map_subset(fingerprint, types, neighborhoods, price_range, metric):
     public_frame = get_bundle(fingerprint)[0]
     subset = filter_map_data(public_frame, types=types or None, neighborhoods=neighborhoods or None,
                              price_range=price_range, color_metric=metric)
-    return subset, group_locations(subset, color_metric=metric)
+    return subset, group_locations(subset, color_metric=metric,
+                                   color_scale=get_color_scale(fingerprint, metric))
 
 
 st.title("Explorador y comparador inmobiliario")
@@ -78,17 +84,20 @@ with st.container(border=True):
     first = st.columns(3)
     first[0].selectbox("Tipo de propiedad", list(PROPERTY_LABELS), key="query_type", format_func=PROPERTY_LABELS.get)
     first[1].selectbox("Barrio", fitted.categories["neighborhood"], key="query_neighborhood")
-    first[2].number_input("Ambientes", min_value=1, max_value=20, step=1, key="query_rooms")
+    # Let numeric edits reach shared validation, rather than retain stale widget values.
+    first[2].number_input("Ambientes", step=1, key="query_rooms", help="Entero entre 1 y 20.")
     second = st.columns(2)
-    second[0].number_input("Superficie total (m²)", min_value=0.1, max_value=10000.0, step=1.0, key="query_total")
-    second[1].number_input("Superficie cubierta (m²)", min_value=0.1, max_value=10000.0, step=1.0, key="query_covered")
+    second[0].number_input("Superficie total (m²)", step=1.0, key="query_total", help="Mayor que 0; se valida al comparar.")
+    second[1].number_input("Superficie cubierta (m²)", step=1.0, key="query_covered", help="Mayor que 0 y no mayor que la superficie total.")
     with st.expander("Ubicación aproximada", expanded=False):
         st.caption("La regresión usa el barrio. Los comparables usan estas coordenadas; pueden cruzar un límite barrial.")
         if st.button("Usar ubicación de los ejemplos del barrio", key="use_neighborhood"):
             st.session_state.query_lat, st.session_state.query_lon = neighborhood_location(train, st.session_state.query_neighborhood)
         location = st.columns(2)
-        location[0].number_input("Latitud aproximada", min_value=LAT_BOUNDS[0], max_value=LAT_BOUNDS[1], step=0.001, format="%.3f", key="query_lat")
-        location[1].number_input("Longitud aproximada", min_value=LON_BOUNDS[0], max_value=LON_BOUNDS[1], step=0.001, format="%.3f", key="query_lon")
+        location[0].number_input("Latitud aproximada", step=0.001, format="%.3f", key="query_lat",
+                                 help=f"Rango disponible: {LAT_BOUNDS[0]} a {LAT_BOUNDS[1]}.")
+        location[1].number_input("Longitud aproximada", step=0.001, format="%.3f", key="query_lon",
+                                 help=f"Rango disponible: {LON_BOUNDS[0]} a {LON_BOUNDS[1]}.")
         st.caption("El botón usa un punto de referencia de entrenamiento. Podés editarlo; no representa un domicilio.")
     st.caption(f"Ubicación elegida: {st.session_state.query_lat:.3f}, {st.session_state.query_lon:.3f}")
     with st.expander("Ajustar comparables", expanded=False):
@@ -183,11 +192,12 @@ with st.expander("Filtros y capas del mapa", expanded=False):
     show_neighbors = layers[2].checkbox("Comparables", value=True, key="map_show_neighbors")
     st.caption("Estos filtros cambian sólo los datos visibles. La consulta, los vecinos y los modelos mantienen su configuración.")
 
+color_scale = get_color_scale(fingerprint, metric)
 with st.container(key="map_status"):
     if price_min > price_max:
         st.warning("En el mapa, el precio mínimo no puede superar al máximo.")
         filtered = frame.iloc[:0].copy()
-        locations = group_locations(filtered, color_metric=metric)
+        locations = group_locations(filtered, color_metric=metric, color_scale=color_scale)
     else:
         filtered, locations = get_map_subset(fingerprint, tuple(map_types), tuple(map_neighborhoods),
                                              (price_min, price_max), metric)
@@ -206,19 +216,47 @@ if view_controls[1].button("Enfocar consulta", key="view_query", disabled=not bo
     focus = pd.concat([focus, pd.DataFrame([{"lat": map_query.lat, "lon": map_query.lon}])], ignore_index=True)
     st.session_state.map_view_state = fit_viewport(focus)
     st.session_state.map_view_revision = st.session_state.get("map_view_revision", 0) + 1
-deck = build_map(frame, filtered_frame=filtered, grouped_data=locations, color_metric=metric, query=map_query,
+deck = build_map(frame, filtered_frame=filtered, grouped_data=locations, color_metric=metric,
+                 color_scale=color_scale, query=map_query,
                  comparable_row_ids=neighbor_ids, show_data=show_data, show_query=show_query,
                  show_comparables=show_neighbors, view_state=st.session_state.get("map_view_state"))
 map_event = st.pydeck_chart(deck, width="stretch", height=420, on_select="rerun", selection_mode="single-object",
     key=f"map_canvas_{st.session_state.get('map_view_revision', 0)}",
     alt="Mapa de CABA con registros agrupados por ubicación, consulta naranja y comparables azules. El selector de ubicación permite consultar los mismos registros con teclado.")
 st.caption("Naranja: consulta · Azul: comparables · Los puntos coincidentes agrupan varios registros.")
-if len(locations):
-    st.caption(f"Color de los datos: {money(locations.attrs['color_min'])} a {money(locations.attrs['color_max'])}{'/m²' if metric == 'usd_m2' else ''}. Escala logarítmica; mediana por ubicación.")
+legend = locations.attrs
+if legend["legend_values"]:
+    unit = "USD/m²" if metric == "usd_m2" else "USD total"
+    transform = "lineal" if legend["color_scale"] == "linear" else "logarítmica"
+    st.caption(f"Color de los datos · {unit} · Escala {transform} fija · P2–P98 de medianas por ubicación.")
+    # Trusted numeric metadata and the same full palette used by the map.
+    gradient = ",".join(f"rgb({int(red)},{int(green)},{int(blue)})"
+                        for red, green, blue in legend["palette_colors"])
+    background = f"linear-gradient(to right,{gradient})" if len(legend["palette_colors"]) > 1 else gradient
+    ticks = legend["legend_values"]
+    positions = [0, len(ticks) // 2, len(ticks) - 1] if len(ticks) > 1 else [0]
+    labels = [money(ticks[index]).removeprefix("USD ") for index in positions]
+    if len(labels) > 1:
+        labels[0], labels[-1] = "≤ " + labels[0], "≥ " + labels[-1]
+    tick_html = "".join(f"<span>{label}</span>" for label in labels)
+    st.html(f'<div style="padding:4px 0 2px"><div aria-hidden="true" '
+            f'style="height:16px;border-radius:4px;border:1px solid #6b7280;'
+            f'background:{background}"></div>'
+            f'<div style="display:flex;justify-content:space-between;gap:8px;'
+            f'font-size:0.85rem;margin-top:4px">{tick_html}</div></div>')
+    if len(locations):
+        color_note = ("Referencia constante: todos los puntos comparten color; los valores se conservan."
+                      if legend.get("color_constant") else
+                      "Sólo se satura el color; todos los valores se conservan.")
+        st.caption(f"Valores reales visibles: {money(legend['observed_min'])} a {money(legend['observed_max'])}"
+                   f"{'/m²' if metric == 'usd_m2' else ''}. "
+                   f"{legend['below_count']} ubicaciones por debajo y {legend['above_count']} por encima de la escala. "
+                   + color_note)
 
 with st.expander("Registros de una ubicación", expanded=False):
     # Keep exact comparable rows accessible even outside the base-layer filters.
-    neighbor_locations = group_locations(frame.loc[frame.row_id.isin(neighbor_ids)], metric)
+    neighbor_locations = group_locations(frame.loc[frame.row_id.isin(neighbor_ids)], metric,
+                                         color_scale=color_scale)
     detail_lookup = {}
     for layer_id, groups, label in (("data-locations", locations, "Datos"),
                                      ("selected-comparables", neighbor_locations, "Comparables")):

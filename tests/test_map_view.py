@@ -1,5 +1,6 @@
 """Map invariants: exact model rows, independent filters and safe display data."""
 import json
+from dataclasses import FrozenInstanceError
 from math import asinh, pi, radians, tan
 
 import numpy as np
@@ -8,7 +9,8 @@ import pytest
 
 import map_view
 from data import LAT_BOUNDS, LON_BOUNDS
-from map_view import build_map, filter_map_data, fit_viewport, group_locations
+from map_view import (ColorScale, VIRIDIS_COLORS, build_map, filter_map_data,
+                      fit_color_scale, fit_viewport, group_locations)
 
 
 @pytest.fixture
@@ -67,7 +69,7 @@ def test_layers_independent_and_camera_does_not_follow_visual_filters(frame):
     assert hidden.initial_view_state is state
     empty_base = build_map(frame, filtered_frame=frame.iloc[0:0])
     assert empty_base.initial_view_state.to_json() == normal.initial_view_state.to_json()
-    assert hidden._tooltip == {"text": "{tooltip_text}"}
+    assert hidden._tooltip["text"] == "{tooltip_text}"
 
 
 def test_price_filter_uses_selected_units_and_empty_selection_is_empty(frame):
@@ -82,7 +84,7 @@ def test_price_filter_uses_selected_units_and_empty_selection_is_empty(frame):
 def test_extreme_finite_prices_have_finite_medians_and_rgb(frame):
     frame["usd_m2"] = [1e308, 1.6e308, 1e-300, 1.7e308]
     groups = group_locations(frame)
-    assert groups.attrs["color_scale"] == "log"
+    assert groups.attrs["color_scale"] == "linear"
     assert np.isfinite(groups["color_value"]).all()
     assert groups.loc[groups["count"].eq(2), "color_value"].iloc[0] == pytest.approx(1.3e308)
     for rgb in groups["color"]:
@@ -92,12 +94,16 @@ def test_extreme_finite_prices_have_finite_medians_and_rgb(frame):
     assert all(rgb == equal["color"].iloc[0] for rgb in equal["color"])
 
 
-def test_colour_scale_uses_logarithms_without_clipping_data(frame):
+def test_total_colour_scale_uses_logarithms_without_clipping_data(frame):
     frame = frame.iloc[[0, 2, 3]].copy()
-    frame["usd_m2"] = [10.0, 100.0, 1000.0]
-    groups = group_locations(frame).set_index("color_value")
+    frame["price_usd"] = [10.0, 100.0, 1000.0]
+    scale = ColorScale("price_usd", 10, 1000, "log")
+    groups = group_locations(frame, "price_usd", color_scale=scale).set_index("color_value")
     low, middle, high = [groups.loc[value, "color"] for value in (10, 100, 1000)]
-    assert middle == [round((a + b) / 2) for a, b in zip(low, high)]
+    assert low == list(VIRIDIS_COLORS[0])
+    assert middle == list(VIRIDIS_COLORS[128])
+    assert high == list(VIRIDIS_COLORS[-1])
+    assert scale.proportion(100) == .5
     assert set(groups.index) == {10, 100, 1000}
 
 
@@ -146,9 +152,9 @@ def test_prepared_base_groups_are_reused_and_match_normal_map(frame, monkeypatch
     grouped_row_counts = []
     real_group_locations = group_locations
 
-    def observe_grouping(rows, color_metric):
+    def observe_grouping(rows, color_metric, **kwargs):
         grouped_row_counts.append(len(rows))
-        return real_group_locations(rows, color_metric)
+        return real_group_locations(rows, color_metric, **kwargs)
 
     monkeypatch.setattr(map_view, "group_locations", observe_grouping)
     reused = build_map(frame, grouped_data=groups, comparable_row_ids=(40, 12))
@@ -197,3 +203,170 @@ def test_webgl_dimension_units_are_literals_not_javascript_accessors(frame):
         assert layer["radiusUnits"] == "pixels"
         if layer["stroked"]:
             assert layer["lineWidthUnits"] == "pixels"
+
+
+def test_reference_uses_location_medians_with_equal_location_weight(frame):
+    # Location medians: 1500, 4000, 5000. Raw rows would give different limits.
+    reference = fit_color_scale(frame)
+    assert reference.lower == pytest.approx(1600)
+    assert reference.upper == pytest.approx(4960)
+    assert reference.transform == "linear"
+    assert fit_color_scale(frame, "price_usd").transform == "log"
+    assert fit_color_scale(frame.sample(frac=1, random_state=4)) == reference
+    with pytest.raises(FrozenInstanceError):
+        reference.lower = 0
+
+
+def test_filters_keep_fixed_domain_and_same_values_the_same_colour(frame):
+    reference = fit_color_scale(frame)
+    all_groups = group_locations(frame, color_scale=reference)
+    subset = filter_map_data(frame, neighborhoods=["Belgrano"])
+    groups = group_locations(subset, color_scale=reference)
+    assert groups.attrs["color_min"] == all_groups.attrs["color_min"]
+    assert groups.attrs["color_max"] == all_groups.attrs["color_max"]
+    assert groups.attrs["legend_values"] == all_groups.attrs["legend_values"]
+    assert groups.attrs["palette_colors"] == all_groups.attrs["palette_colors"]
+    assert groups.iloc[0]["color"] == all_groups.loc[all_groups["color_value"].eq(4000), "color"].iloc[0]
+    assert groups.attrs["observed_min"] == groups.attrs["observed_max"] == 4000
+    assert groups.attrs["below_count"] == groups.attrs["above_count"] == 0
+
+
+def test_build_map_anchors_filtered_and_reused_groups_to_full_reference(frame):
+    subset = frame.loc[frame.row_id.eq(12)]
+    prepared = group_locations(subset)  # Its standalone constant domain is wrong for full map.
+    original = prepared.copy(deep=True)
+    expected = fit_color_scale(frame).color(4000)
+    assert prepared.iloc[0]["color"] != expected
+    for deck in (build_map(frame, filtered_frame=subset),
+                 build_map(frame, filtered_frame=subset, grouped_data=prepared)):
+        assert deck.layers[0].data[0]["color"] == expected
+        assert deck.layers[0].data[0]["color_value"] == 4000
+        assert deck.layers[0].data[0]["row_ids"] == (12,)
+    pd.testing.assert_frame_equal(prepared, original)
+
+
+def test_extremes_preserve_values_and_ids_and_disclose_only_colour_saturation(frame):
+    original = frame.copy(deep=True)
+    reference = fit_color_scale(frame)
+    groups = group_locations(frame, color_scale=reference)
+    assert sorted(value for ids in groups.row_ids for value in ids) == sorted(frame.row_id)
+    assert set(groups.color_value) == {1500, 4000, 5000}
+    assert groups.attrs["below_count"] == groups.attrs["above_count"] == 1
+    low = groups.loc[groups.color_value.eq(1500)].iloc[0]
+    high = groups.loc[groups.color_value.eq(5000)].iloc[0]
+    assert low.color == list(VIRIDIS_COLORS[0])
+    assert high.color == list(VIRIDIS_COLORS[-1])
+    assert "1.500,00" in low.tooltip_text and "por debajo de P2" in low.tooltip_text
+    assert "5.000,00" in high.tooltip_text and "por encima de P98" in high.tooltip_text
+    assert "valor real sin recortar" in high.tooltip_text
+    assert "no identifica un inmueble" in high.tooltip_text
+    assert "DO_NOT_SERIALIZE" not in " ".join(groups.tooltip_text)
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_legend_and_palette_match_normalization_in_both_metrics(frame):
+    assert len(VIRIDIS_COLORS) == 256
+    assert VIRIDIS_COLORS[0] == (68, 1, 84)
+    assert VIRIDIS_COLORS[-1] == (253, 231, 37)
+    for metric in ("usd_m2", "price_usd"):
+        scale = fit_color_scale(frame, metric)
+        groups = group_locations(frame, metric, color_scale=scale)
+        ticks = groups.attrs["legend_values"]
+        assert len(ticks) == 5
+        assert np.allclose([scale.proportion(v) for v in ticks], [0, .25, .5, .75, 1])
+        assert groups.attrs["legend_colors"] == tuple(tuple(scale.color(v)) for v in ticks)
+        assert groups.attrs["palette_colors"] == VIRIDIS_COLORS
+        assert all(0 <= channel <= 255 for color in VIRIDIS_COLORS for channel in color)
+
+
+@pytest.mark.parametrize("lower,upper", [(0, 2), (-1, 2), (3, 2), (float("nan"), 2),
+                                        (1, float("inf")), (None, 2), (1, None), (True, 2)])
+def test_reference_rejects_invalid_limits(lower, upper):
+    with pytest.raises(ValueError):
+        ColorScale("usd_m2", lower, upper, "linear")
+
+
+def test_reference_rejects_wrong_metric_transform_palette_and_empty_nonempty_use(frame):
+    with pytest.raises(ValueError):
+        ColorScale("usd_m2", 1, 2, "log")
+    with pytest.raises(ValueError):
+        ColorScale("price_usd", 1, 2, "linear")
+    with pytest.raises(ValueError):
+        ColorScale("usd_m2", 1, 2, "linear", palette="other")
+    wrong_metric = fit_color_scale(frame, "price_usd")
+    with pytest.raises(ValueError):
+        group_locations(frame, color_scale=wrong_metric)
+    with pytest.raises(ValueError):
+        build_map(frame, color_scale=wrong_metric)
+    with pytest.raises(ValueError):
+        group_locations(frame, color_scale=fit_color_scale(frame.iloc[:0]))
+
+
+def test_empty_and_constant_references_have_safe_legends(frame):
+    empty = frame.iloc[:0]
+    reference = fit_color_scale(empty)
+    assert reference.lower is reference.upper is None
+    groups = group_locations(empty, color_scale=reference)
+    assert groups.attrs["legend_values"] == groups.attrs["palette_colors"] == ()
+    assert build_map(empty).layers[0].data == []
+    fixed_empty = group_locations(empty, color_scale=fit_color_scale(frame))
+    assert len(fixed_empty.attrs["legend_values"]) == 5
+    assert fixed_empty.attrs["observed_min"] is fixed_empty.attrs["observed_max"] is None
+    constant = frame.assign(usd_m2=7.0)
+    groups = group_locations(constant)
+    assert groups.attrs["legend_values"] == (7.0,)
+    assert groups.attrs["palette_colors"] == (VIRIDIS_COLORS[128],)
+    assert groups.attrs["below_count"] == groups.attrs["above_count"] == 0
+    assert all(color == list(VIRIDIS_COLORS[128]) for color in groups.color)
+
+
+def test_log_scale_remains_finite_across_extreme_positive_domain(frame):
+    scale = ColorScale("price_usd", 1e-300, 1.7e308, "log")
+    assert all(np.isfinite(scale.legend_values))
+    for value in (1e-310, 1e-300, 1.0, 1e308, 1.7e308):
+        assert 0 <= scale.proportion(value) <= 1
+        assert all(isinstance(channel, int) for channel in scale.color(value))
+    frame["price_usd"] = [1e308, 1.6e308, 1e-300, 1.7e308]
+    assert np.isfinite(group_locations(frame, "price_usd").color_value).all()
+
+
+def test_collapsed_quantiles_keep_tail_colours_consistent_with_single_colour_legend():
+    rows = pd.DataFrame({
+        "row_id": range(100), "lat": [-34.6] * 100,
+        "lon": np.linspace(-58.5, -58.401, 100),
+        "usd_m2": [1000.0] * 99 + [1_000_000.0],
+    })
+    scale = fit_color_scale(rows)
+    assert scale.lower == scale.upper == 1000
+    groups = group_locations(rows, color_scale=scale)
+    assert groups.attrs["color_constant"] is True
+    assert groups.attrs["palette_colors"] == (VIRIDIS_COLORS[128],)
+    assert all(rgb == list(VIRIDIS_COLORS[128]) for rgb in groups.color)
+    assert groups.attrs["above_count"] == 1  # Actual tail value remains disclosed.
+    extreme = groups.loc[groups.color_value.eq(1_000_000)].iloc[0]
+    assert extreme.row_ids == (99,)
+    assert "1.000.000,00" in extreme.tooltip_text and "color único" in extreme.tooltip_text
+    assert "Color saturado" not in extreme.tooltip_text
+
+
+def test_adjacent_largest_floats_have_finite_log_legend():
+    upper = np.finfo(float).max
+    lower = np.nextafter(upper, 0)
+    scale = ColorScale("price_usd", lower, upper, "log")
+    values = scale.legend_values
+    assert len(values) == 5 and all(np.isfinite(values))
+    assert all(lower <= value <= upper for value in values)
+    assert values[0] == lower and values[-1] == upper
+    assert all(isinstance(channel, int) for value in values for channel in scale.color(value))
+
+
+def test_tooltip_is_plain_text_wrapped_and_anchored_inside_the_map(frame):
+    # The bundled deck widget misplaces cursor-relative cards after a scroll.
+    # Its getTooltip style is applied after the faulty transform, overriding it.
+    tooltip = build_map(frame)._tooltip
+    assert tooltip["text"] == "{tooltip_text}" and "html" not in tooltip
+    assert tooltip["style"]["transform"] == "translate(8px, 8px)"
+    assert tooltip["style"]["maxWidth"] == "min(360px, calc(100% - 16px))"
+    assert tooltip["style"]["whiteSpace"] == "pre-line"
+    assert tooltip["style"]["overflowWrap"] == "anywhere"
+    assert tooltip["style"]["pointerEvents"] == "none"

@@ -54,9 +54,9 @@ def test_initial_map_exposes_every_public_record_and_common_holdout_without_uplo
     assert not app.error
     chart_layers = layers(app)
     groups = chart_layers["data-locations"]["data"]
-    assert sum(group["count"] for group in groups) == 7496
+    assert sum(group["count"] for group in groups) == 7495
     assert len(groups) == 3544
-    assert sorted(row_id for group in groups for row_id in group["row_ids"]) == list(range(7496))
+    assert sorted(row_id for group in groups for row_id in group["row_ids"]) == list(range(7495))
     assert not chart_layers["submitted-query"]["data"]
     assert not chart_layers["selected-comparables"]["data"]
     assert app.button(key="view_query").disabled
@@ -199,7 +199,7 @@ def test_invalid_surface_clears_old_result_prices_and_map_marker(app):
     assert not estimates(app)
     assert not layers(app)["submitted-query"]["data"]
     assert not layers(app)["selected-comparables"]["data"]
-    assert sum(group["count"] for group in layers(app)["data-locations"]["data"]) == 7496
+    assert sum(group["count"] for group in layers(app)["data-locations"]["data"]) == 7495
 
 
 def test_invalid_submission_preserves_last_valid_three_neighbor_evaluation(app):
@@ -224,6 +224,43 @@ def test_invalid_submission_preserves_last_valid_three_neighbor_evaluation(app):
     assert {metric.label: metric.value for metric in app.metric
             if metric.label.startswith("Cobertura")} == valid_coverage
     assert "955 reservados" in values(app, "markdown")
+
+
+@pytest.mark.parametrize("key,invalid_value,error", [
+    ("query_total", 0.0, "La superficie total debe ser mayor que 0"),
+    ("query_total", -1.0, "La superficie total debe ser mayor que 0"),
+    ("query_covered", 0.0, "La superficie cubierta debe ser positiva"),
+    ("query_covered", -1.0, "La superficie cubierta debe ser positiva"),
+    ("query_rooms", 0, "Los ambientes deben ser un entero entre 1 y 20"),
+    ("query_rooms", 21, "Los ambientes deben ser un entero entre 1 y 20"),
+    ("query_lat", -35.0, "La ubicación debe estar dentro del área disponible de CABA"),
+    ("query_lon", -59.0, "La ubicación debe estar dentro del área disponible de CABA"),
+])
+def test_numeric_query_edits_reach_validation_without_reusing_stale_values(app, key, invalid_value, error):
+    app.slider(key="filter_k").set_value(3)
+    submit(app)
+    original_prices = estimates(app)
+    original_point = layers(app)["submitted-query"]["data"]
+    original_evaluation = next(table.value for table in app.dataframe if "Método" in table.value).copy()
+    assert len(original_prices) == 4
+
+    app.number_input(key=key).set_value(invalid_value).run()
+    assert not app.exception
+    assert app.session_state[key] == invalid_value
+    assert "cambios pendientes" in values(app, "info")
+    assert estimates(app) == original_prices
+    assert layers(app)["submitted-query"]["data"] == original_point
+
+    submit(app)
+    assert error in values(app, "error")
+    assert app.session_state["result"] is None
+    assert not estimates(app)
+    assert not layers(app)["submitted-query"]["data"]
+    assert not layers(app)["selected-comparables"]["data"]
+    assert sum(group["count"] for group in layers(app)["data-locations"]["data"]) == 7495
+    assert app.session_state["evaluation_filters"].k == 3
+    current_evaluation = next(table.value for table in app.dataframe if "Método" in table.value)
+    pd.testing.assert_frame_equal(current_evaluation, original_evaluation)
 
 
 def test_location_selector_exposes_all_coincident_records_without_hover(app):

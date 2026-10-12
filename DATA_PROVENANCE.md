@@ -7,18 +7,34 @@ The bundled file is derived from that supplied CSV. It is not a replacement gene
 ## Published projection
 
 - File: `data/demo.csv`
-- Rows: 7,496
-- Bytes: 429,624 (UTF-8, comma-separated, LF line endings)
+- Rows: 7,495
+- Bytes: 429,571 (UTF-8, comma-separated, LF line endings)
 - Distinct rounded coordinate pairs: 3,544
 - Columns, in order: property_type, neighborhood, area_total, area_covered, rooms, lat, lon, price_usd
-- SHA-256: c8870813f654d5e9d79b0ec305497ff0d8b134785024d2eb2b0a79f0ec6201cb
+- SHA-256: d4c8c9e878393bcbbffc07ceb22b668f416e32c3d93e16f5e941813e93cb2951
 - Coordinates: rounded to three decimal places. Distances are approximate.
 
 Preparation retains the documented CABA labels, apartment/house/PH types, USD denomination and valid complete numeric cases. It validates positive areas and prices, covered area no greater than total, integer room counts, and plausible coordinates. It deduplicates by location and characteristics without putting price in the duplicate key. After selecting the eight fields, it rounds coordinates and repeats validation and deduplication. This can merge distinct records with identical recorded characteristics; it is a deliberate minimization trade-off.
 
+The preparation then applies the single reviewed exclusion using a SHA-256 fingerprint of the normalized eight-field public row. The rule and its reason are recorded in `REVIEWED_EXCLUSIONS` in `scripts/prepare_demo.py`. Applying the decision after the existing deduplication prevents another duplicate from silently replacing the excluded row. The fingerprint uses already-public fields, not a private source identifier.
+
 The full original file is not bundled. Descriptions, titles, names, contacts, addresses, URLs, images, unused fields and private audit reports are excluded. Only numeric fields and allowlisted type/neighborhood labels survive. The published selection does not represent all records in the supplied file and provides no evidence about the housing market.
 
-The unified explorer reuses this same projection without adding records or increasing location precision. Its map can display all published records and their allowed attributes. Grouping coincident points is a display choice; the underlying records remain accessible. The geographic scope is the declared CABA labels plus a plausibility rectangle, not an administrative polygon or an independently verified location. Neighborhood labels include common real-estate subareas.
+The unified explorer uses the minimized projection after one authorized target-definition exclusion described below. It adds no records and does not increase location precision. Its map can display all retained records and their allowed attributes. Grouping coincident points is a display choice; the underlying records remain accessible, and shared rounded coordinates do not establish property identity. The geographic scope is the declared CABA labels plus a plausibility rectangle, not an administrative polygon or an independently verified location. Neighborhood labels include common real-estate subareas.
+
+## Structured-source review and extreme values
+
+A review of the original structured fields reproduced the initial 7,496-row projection byte for byte. The source file remained unchanged. Every projected row had a source match. Redundant price, currency and unit-price checks found zero numerical contradictions, accounting for whether a unit-price field uses total or covered area. This checks consistency within the supplied file; it does not establish that an amount is a total property price or independently verify the author's declaration, price accuracy, or property identity.
+
+A limited installment-amount screening covered the initial 7,496 projected rows and their 7,936 source matches. It produced 20 candidates: one direct amount relationship confirmed by review, and 19 ambiguous proximity matches. Screening every row with a limited rule is not a full semantic validation of the dataset; unrecognized wording or number formats can escape detection.
+
+The confirmed record represents an installment rather than the total property price. With the author's authorization, that one record was excluded, leaving 7,495 rows. The decision is based on the target's meaning, independently of prediction errors or held-out performance. No total price was inferred, multiplied from installments, converted or imputed. All other retained values are unchanged. The ambiguous matches remain provisional rather than being automatically removed.
+
+A separate source-currency ambiguity also lacks an unambiguous amount/currency relationship, so no automatic conversion or other correction has been applied. Original row identifiers, private audit reports and source text are not published.
+
+The review does not justify removing other records merely because their prices are extreme or their prediction errors are large. Any correction needs evidence about the recorded target, separate from its model error. No price threshold derived from held-out outcomes is used to clean the data, select model targets or improve reported errors.
+
+Map readability is handled separately. Viridis color limits use the 2nd and 98th percentiles of the full dataset's location medians and remain fixed under visual filters. USD/m² uses a linear color scale; total USD uses a logarithmic color scale. Values outside the display limits saturate at the endpoint colors, labeled with ≤ and ≥. All underlying values remain intact and available in the record details, models and evaluation. This is a visual transformation only.
 
 ## Reproduce the transformation
 
@@ -28,6 +44,8 @@ From the project root, use a local source path you are authorized to process:
 
 The script rejects attempts to overwrite the input. The original hash was checked before and after preparing this release and was unchanged. The input is read in place; no data provider is contacted. Replacing the source creates a different dataset and requires reviewing its provenance and projection separately.
 
+The script's JSON report includes the number of reviewed exclusions, each matching public-row fingerprint and reason, the output row count, and the output SHA-256. Two runs from the authorized source reproduced the current file byte for byte; compared with the initial projection, the output removes exactly one line and changes no retained values. A changed record will not match the exact exclusion fingerprint; adding a new correction requires review rather than a broader price threshold. The original two repositories and their datasets are preserved; this correction applies to the unified explorer.
+
 Unit price (price_usd / area_total), covered ratio and spatial groups are derived at runtime, not independently observed targets. Evaluation measures performance on this author-declared fictional dataset only. It must not be presented as real or historical property prices, closing prices, current valuations or market accuracy.
 
-The fixed spatial split reserves 955 rows in 38 whole cells and retains 6,541 rows in 152 cells for training. Showing the whole dataset on the map does not add reserved targets to either predictive model. The unified comparison computes coverage over the same reserved rows for both methods, and errors on their jointly supported subset. That subset can change with comparable-search settings; previous metrics from separate apps are not reused.
+The fixed spatial split reserves 955 rows in 38 whole cells and retains 6,540 rows in 152 cells for training. Showing the whole dataset on the map does not add reserved targets to either predictive model. The unified comparison computes coverage over the same reserved rows for both methods, and errors on their jointly supported subset. That subset can change with comparable-search settings; previous metrics from separate apps are not reused.
