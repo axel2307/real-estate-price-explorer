@@ -6,6 +6,21 @@ A Streamlit portfolio project for exploring a property dataset and comparing **f
 
 The application bundles 7,495 records from a minimized, author-authorized dataset. Its short interface notice is **"Demo educativa con datos ficticios"**. The author declared the supplied data fictional; that declaration has not been independently verified. Results describe this demonstration dataset, not current valuations, closing prices, or measured market accuracy. See [data provenance](DATA_PROVENANCE.md) and [privacy](PRIVACY.md) for the source declaration and published fields.
 
+## Screenshots
+
+![Public demo map with grouped property records and a Viridis price legend](docs/images/map-explorer.png)
+
+The public demo uses an author-declared fictional dataset. The map supports educational exploration, not current property valuation.
+
+<details>
+<summary>View the two model outputs</summary>
+
+![Public demo showing geographic comparables and linear regression results for one property query](docs/images/model-comparison.png)
+
+One submitted query produces two separate estimates. The app does not blend them into a third result.
+
+</details>
+
 ## Run locally
 
 Use Python 3.12 from this project directory:
@@ -97,9 +112,10 @@ explorer.py             Shared query and comparison helpers
 comparables.py          Filtered geographic neighbors
 linear.py               Named, scaled OLS fit and support checks
 evaluation.py           Coverage and errors on common held-out cases
-map_view_v1.py          Visual filters, coincident points and map layers
+map_view_v1.py           Visual filters, coincident points and map layers
 data.py                 Validation, public projection loading, spatial split
 data/demo.csv           Authorized eight-field demonstration projection
+docs/images/            Screenshots captured from the public demo
 scripts/prepare_demo.py Local, explicit projection preparation
 tests/                  Automated behavioral and numerical checks
 ```
