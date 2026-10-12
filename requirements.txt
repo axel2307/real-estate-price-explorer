@@ -1,0 +1,5 @@
+-c constraints.txt
+numpy==2.5.4
+pandas==3.0.6
+pydeck==0.9.3
+streamlit==1.65.0
